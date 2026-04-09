@@ -23,9 +23,7 @@ export function CatalogView({ groupedCatalog, onEditItem, onCreateRecord }: Cata
                 <div className="catalog-header">
                   <div>
                     <h4>{item.title}</h4>
-                    <p>
-                      {item.code} · {item.required ? 'Required' : 'Optional'}
-                    </p>
+                    <p>{`${item.code} | ${item.required ? 'Required' : 'Optional'}`}</p>
                   </div>
                   <div className="pill-row">
                     <span className={`pill ${item.missing ? 'danger' : 'success'}`}>

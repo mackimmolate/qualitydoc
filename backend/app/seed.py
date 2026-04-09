@@ -303,6 +303,15 @@ def seed_initial_data(session: Session) -> None:
 
     settings = session.get(Settings, 1)
     if settings is None:
-        session.add(Settings(id=1, workspace_name="QualityDoc", notification_enabled=False, due_soon_days=30))
+        session.add(
+            Settings(
+                id=1,
+                workspace_name="QualityDoc",
+                notification_enabled=False,
+                due_soon_days=30,
+                document_root_path=None,
+                library_last_scanned_at=None,
+            )
+        )
 
     session.commit()

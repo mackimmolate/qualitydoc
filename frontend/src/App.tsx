@@ -7,26 +7,31 @@ import type {
   DashboardData,
   DocumentFilters,
   DocumentRecord,
+  LibraryFile,
+  LibraryFilters,
   Settings,
   ViewName,
 } from './types'
 import {
   catalogToDraft,
+  documentToDraft,
   emptyDocumentDraft,
   emptyToNull,
+  libraryFileToDraft,
   numberOrNull,
   settingsToDraft,
   toDocumentPayload,
-  documentToDraft,
 } from './utils/ui'
 import { CatalogView } from './views/CatalogView'
 import { DashboardView } from './views/DashboardView'
 import { DocumentsView } from './views/DocumentsView'
+import { LibraryView } from './views/LibraryView'
 import { SettingsView } from './views/SettingsView'
 
 type DocumentEditorState = {
   mode: 'create' | 'edit'
   documentId?: number
+  sourceLibraryFileId?: number
   draft: ReturnType<typeof emptyDocumentDraft>
 }
 
@@ -38,6 +43,7 @@ type CatalogEditorState = {
 
 const viewLabels: Record<ViewName, string> = {
   dashboard: 'Dashboard',
+  library: 'Library',
   documents: 'Documents',
   catalog: 'Catalog',
   settings: 'Settings',
@@ -48,6 +54,7 @@ function App() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null)
   const [catalog, setCatalog] = useState<CatalogItem[]>([])
   const [documents, setDocuments] = useState<DocumentRecord[]>([])
+  const [libraryFiles, setLibraryFiles] = useState<LibraryFile[]>([])
   const [settings, setSettings] = useState<Settings | null>(null)
   const [settingsDraft, setSettingsDraft] = useState<ReturnType<typeof settingsToDraft> | null>(null)
   const [documentEditor, setDocumentEditor] = useState<DocumentEditorState | null>(null)
@@ -58,6 +65,12 @@ function App() {
     area: 'all',
     attention: 'all',
   })
+  const [libraryFilters, setLibraryFilters] = useState<LibraryFilters>({
+    query: '',
+    status: 'unmapped',
+    area: 'all',
+    presence: 'present',
+  })
   const [initializing, setInitializing] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [busyLabel, setBusyLabel] = useState<string | null>(null)
@@ -65,23 +78,26 @@ function App() {
   const [notice, setNotice] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const deferredQuery = useDeferredValue(filters.query)
+  const deferredLibraryQuery = useDeferredValue(libraryFilters.query)
 
-  const loadWorkspace = useEffectEvent(async (nextFilters: DocumentFilters) => {
+  const loadWorkspace = useEffectEvent(async (nextDocumentFilters: DocumentFilters, nextLibraryFilters: LibraryFilters) => {
     if (!initializing) {
       setRefreshing(true)
     }
 
     setError(null)
     try {
-      const [nextDashboard, nextCatalog, nextDocuments, nextSettings] = await Promise.all([
+      const [nextDashboard, nextCatalog, nextDocuments, nextLibraryFiles, nextSettings] = await Promise.all([
         api.getDashboard(),
         api.getCatalog(),
-        api.getDocuments(nextFilters),
+        api.getDocuments(nextDocumentFilters),
+        api.getLibraryFiles(nextLibraryFilters),
         api.getSettings(),
       ])
       setDashboard(nextDashboard)
       setCatalog(nextCatalog)
       setDocuments(nextDocuments)
+      setLibraryFiles(nextLibraryFiles)
       setSettings(nextSettings)
       setSettingsDraft(settingsToDraft(nextSettings))
     } catch (caughtError) {
@@ -93,8 +109,11 @@ function App() {
   })
 
   useEffect(() => {
-    void loadWorkspace({ ...filters, query: deferredQuery })
-  }, [deferredQuery, filters, refreshKey])
+    void loadWorkspace(
+      { ...filters, query: deferredQuery },
+      { ...libraryFilters, query: deferredLibraryQuery },
+    )
+  }, [deferredQuery, deferredLibraryQuery, filters, libraryFilters, refreshKey])
 
   const maybeSendNotifications = useEffectEvent((nextDashboard: DashboardData, nextSettings: Settings) => {
     if (!nextSettings.notification_enabled || typeof Notification === 'undefined') {
@@ -134,6 +153,12 @@ function App() {
     })
   }
 
+  function updateLibraryFilter<K extends keyof LibraryFilters>(key: K, value: LibraryFilters[K]) {
+    startTransition(() => {
+      setLibraryFilters((current) => ({ ...current, [key]: value }))
+    })
+  }
+
   function refreshCurrentView() {
     setRefreshKey((current) => current + 1)
   }
@@ -142,6 +167,15 @@ function App() {
     const suggestedCatalog = catalogItemId ?? catalog.find((item) => item.missing)?.id ?? catalog[0]?.id
     setDocumentEditor({ mode: 'create', draft: emptyDocumentDraft(suggestedCatalog) })
     setActiveView('documents')
+  }
+
+  function openImportFromLibrary(file: LibraryFile) {
+    setDocumentEditor({
+      mode: 'create',
+      sourceLibraryFileId: file.id,
+      draft: libraryFileToDraft(file),
+    })
+    setActiveView('library')
   }
 
   function openEditDocument(document: DocumentRecord) {
@@ -157,7 +191,10 @@ function App() {
     setNotice(null)
     try {
       const payload = toDocumentPayload(documentEditor.draft)
-      if (documentEditor.mode === 'create') {
+      if (documentEditor.mode === 'create' && documentEditor.sourceLibraryFileId) {
+        await api.createDocumentFromLibrary(documentEditor.sourceLibraryFileId, payload)
+        setNotice('Library file imported into the register.')
+      } else if (documentEditor.mode === 'create') {
         await api.createDocument(payload)
         setNotice('Document saved. TISAX coverage refreshed.')
       } else if (documentEditor.documentId) {
@@ -211,6 +248,7 @@ function App() {
         workspace_name: settingsDraft.workspace_name.trim() || 'QualityDoc',
         notification_enabled: settingsDraft.notification_enabled,
         due_soon_days: numberOrNull(settingsDraft.due_soon_days) ?? 30,
+        document_root_path: emptyToNull(settingsDraft.document_root_path),
       })
       setSettings(updated)
       setSettingsDraft(settingsToDraft(updated))
@@ -232,6 +270,68 @@ function App() {
       setNotice(response.message)
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to open the linked document.')
+    } finally {
+      setBusyLabel(null)
+    }
+  }
+
+  async function openLibraryFile(fileId: number) {
+    setBusyLabel('Opening scanned file...')
+    setError(null)
+    setNotice(null)
+    try {
+      const response = await api.openLibraryFile(fileId)
+      setNotice(response.message)
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Unable to open the scanned file.')
+    } finally {
+      setBusyLabel(null)
+    }
+  }
+
+  async function updateLibraryMapping(fileId: number, catalogItemId: number | null) {
+    setBusyLabel('Saving library mapping...')
+    setError(null)
+    setNotice(null)
+    try {
+      await api.updateLibraryFile(fileId, { catalog_item_id: catalogItemId })
+      setNotice('Library mapping updated.')
+      refreshCurrentView()
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Unable to update the library mapping.')
+    } finally {
+      setBusyLabel(null)
+    }
+  }
+
+  async function toggleIgnored(file: LibraryFile) {
+    const nextStatus = file.import_status === 'ignored' ? 'unmapped' : 'ignored'
+    setBusyLabel(nextStatus === 'ignored' ? 'Ignoring file...' : 'Returning file to inbox...')
+    setError(null)
+    setNotice(null)
+    try {
+      await api.updateLibraryFile(file.id, { import_status: nextStatus })
+      setNotice(nextStatus === 'ignored' ? 'File removed from the active inbox.' : 'File returned to the active inbox.')
+      refreshCurrentView()
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Unable to update the library status.')
+    } finally {
+      setBusyLabel(null)
+    }
+  }
+
+  async function scanLibrary() {
+    setBusyLabel('Scanning local document library...')
+    setError(null)
+    setNotice(null)
+    try {
+      const result = await api.scanLibrary()
+      setNotice(
+        `Scan complete: ${result.scanned_count} files checked, ${result.discovered_count} new, ${result.updated_count} refreshed, ${result.missing_count} missing from disk.`,
+      )
+      refreshCurrentView()
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Unable to scan the document library.')
     } finally {
       setBusyLabel(null)
     }
@@ -262,7 +362,7 @@ function App() {
         <div className="loading-card">
           <span className="eyebrow">QualityDoc</span>
           <h1>Building your TISAX workspace</h1>
-          <p>Loading starter catalog, documents, and reminder rules.</p>
+          <p>Loading starter catalog, scanned library files, documents, and reminder rules.</p>
         </div>
       </div>
     )
@@ -280,9 +380,21 @@ function App() {
           </p>
         </div>
         <div className="hero-metrics">
-          <div className="metric-card soft"><span>Coverage</span><strong>{dashboard?.summary.coverage_percent ?? 0}%</strong><small>of required starter items</small></div>
-          <div className="metric-card"><span>Active documents</span><strong>{dashboard?.summary.active_documents ?? 0}</strong><small>documents currently in play</small></div>
-          <div className="metric-card alert"><span>Attention</span><strong>{(dashboard?.summary.missing_required ?? 0) + (dashboard?.summary.overdue ?? 0)}</strong><small>missing or overdue</small></div>
+          <div className="metric-card soft">
+            <span>Coverage</span>
+            <strong>{dashboard?.summary.coverage_percent ?? 0}%</strong>
+            <small>of required starter items</small>
+          </div>
+          <div className="metric-card">
+            <span>Library inbox</span>
+            <strong>{libraryFiles.filter((file) => file.import_status === 'unmapped' && file.is_present).length}</strong>
+            <small>scanned files still to review</small>
+          </div>
+          <div className="metric-card alert">
+            <span>Attention</span>
+            <strong>{(dashboard?.summary.missing_required ?? 0) + (dashboard?.summary.overdue ?? 0)}</strong>
+            <small>missing or overdue</small>
+          </div>
         </div>
       </header>
 
@@ -290,31 +402,43 @@ function App() {
         <aside className="workspace-sidebar">
           <nav className="view-nav" aria-label="Primary">
             {Object.entries(viewLabels).map(([view, label]) => (
-              <button key={view} className={activeView === view ? 'nav-item active' : 'nav-item'} onClick={() => setActiveView(view as ViewName)} type="button">
+              <button
+                key={view}
+                className={activeView === view ? 'nav-item active' : 'nav-item'}
+                onClick={() => setActiveView(view as ViewName)}
+                type="button"
+              >
                 <span>{label}</span>
               </button>
             ))}
           </nav>
           <section className="sidebar-card">
             <h2>What v1 does best</h2>
-            <p>Tracks document ownership, freshness, starter coverage, and reminders without adding process overhead.</p>
+            <p>Tracks document ownership, freshness, starter coverage, and now scans your local document library for import.</p>
           </section>
           <section className="sidebar-card compact">
             <h2>Smart rules</h2>
             <ul className="mini-list">
               <li>Flags missing required TISAX documents</li>
-              <li>Surfaces stale review dates and owner gaps</li>
-              <li>Keeps files outside the app with safe open-link actions</li>
+              <li>Indexes your local Word and Excel library by filename metadata</li>
+              <li>Turns scanned files into linked register records without duplicating storage</li>
             </ul>
           </section>
         </aside>
 
         <main className="workspace-main">
           <div className="toolbar">
-            <div><span className="eyebrow">Current view</span><h2>{viewLabels[activeView]}</h2></div>
+            <div>
+              <span className="eyebrow">Current view</span>
+              <h2>{viewLabels[activeView]}</h2>
+            </div>
             <div className="toolbar-actions">
-              <button className="secondary-button" onClick={refreshCurrentView} type="button">Refresh</button>
-              <button className="primary-button" onClick={() => openCreateDocument()} type="button">Add document</button>
+              <button className="secondary-button" onClick={refreshCurrentView} type="button">
+                Refresh
+              </button>
+              <button className="primary-button" onClick={() => openCreateDocument()} type="button">
+                Add document
+              </button>
             </div>
           </div>
 
@@ -328,15 +452,81 @@ function App() {
           {error ? <div className="info-banner danger">{error}</div> : null}
           {notice ? <div className="info-banner success">{notice}</div> : null}
 
-          {activeView === 'dashboard' && dashboard ? <DashboardView dashboard={dashboard} documents={documents} onCreateDocument={() => openCreateDocument()} onBrowseCatalog={() => setActiveView('catalog')} /> : null}
-          {activeView === 'documents' ? <DocumentsView documents={documents} filters={filters} areaOptions={areaOptions} onUpdateFilter={updateFilter} onEditDocument={openEditDocument} onOpenDocument={openLinkedDocument} /> : null}
-          {activeView === 'catalog' ? <CatalogView groupedCatalog={groupedCatalog} onEditItem={(item) => setCatalogEditor({ itemId: item.id, title: item.title, draft: catalogToDraft(item) })} onCreateRecord={openCreateDocument} /> : null}
-          {activeView === 'settings' && settingsDraft ? <SettingsView draft={settingsDraft} onChange={setSettingsDraft} onSubmit={saveSettings} onRequestNotifications={requestNotificationPermission} /> : null}
+          {activeView === 'dashboard' && dashboard ? (
+            <DashboardView
+              dashboard={dashboard}
+              documents={documents}
+              onCreateDocument={() => openCreateDocument()}
+              onBrowseCatalog={() => setActiveView('catalog')}
+            />
+          ) : null}
+
+          {activeView === 'library' ? (
+            <LibraryView
+              files={libraryFiles}
+              catalog={catalog}
+              filters={libraryFilters}
+              settings={settings}
+              isPagesDemo={isPagesDemo}
+              onUpdateFilter={updateLibraryFilter}
+              onScan={scanLibrary}
+              onOpenFile={openLibraryFile}
+              onPrepareImport={openImportFromLibrary}
+              onUpdateMapping={updateLibraryMapping}
+              onToggleIgnored={toggleIgnored}
+            />
+          ) : null}
+
+          {activeView === 'documents' ? (
+            <DocumentsView
+              documents={documents}
+              filters={filters}
+              areaOptions={areaOptions}
+              onUpdateFilter={updateFilter}
+              onEditDocument={openEditDocument}
+              onOpenDocument={openLinkedDocument}
+            />
+          ) : null}
+
+          {activeView === 'catalog' ? (
+            <CatalogView
+              groupedCatalog={groupedCatalog}
+              onEditItem={(item) => setCatalogEditor({ itemId: item.id, title: item.title, draft: catalogToDraft(item) })}
+              onCreateRecord={openCreateDocument}
+            />
+          ) : null}
+
+          {activeView === 'settings' && settingsDraft ? (
+            <SettingsView
+              draft={settingsDraft}
+              onChange={setSettingsDraft}
+              onSubmit={saveSettings}
+              onRequestNotifications={requestNotificationPermission}
+            />
+          ) : null}
         </main>
       </div>
 
-      {documentEditor ? <DocumentModal catalog={catalog} draft={documentEditor.draft} mode={documentEditor.mode} onChange={(draft) => setDocumentEditor((current) => (current ? { ...current, draft } : current))} onClose={() => setDocumentEditor(null)} onSubmit={saveDocument} /> : null}
-      {catalogEditor ? <CatalogModal title={catalogEditor.title} draft={catalogEditor.draft} onChange={(draft) => setCatalogEditor((current) => (current ? { ...current, draft } : current))} onClose={() => setCatalogEditor(null)} onSubmit={saveCatalogItem} /> : null}
+      {documentEditor ? (
+        <DocumentModal
+          catalog={catalog}
+          draft={documentEditor.draft}
+          mode={documentEditor.mode}
+          onChange={(draft) => setDocumentEditor((current) => (current ? { ...current, draft } : current))}
+          onClose={() => setDocumentEditor(null)}
+          onSubmit={saveDocument}
+        />
+      ) : null}
+
+      {catalogEditor ? (
+        <CatalogModal
+          title={catalogEditor.title}
+          draft={catalogEditor.draft}
+          onChange={(draft) => setCatalogEditor((current) => (current ? { ...current, draft } : current))}
+          onClose={() => setCatalogEditor(null)}
+          onSubmit={saveCatalogItem}
+        />
+      ) : null}
     </div>
   )
 }

@@ -117,12 +117,57 @@ class SettingsRead(BaseModel):
     workspace_name: str
     notification_enabled: bool
     due_soon_days: int
+    document_root_path: str | None
+    library_last_scanned_at: datetime | None
 
 
 class SettingsUpdate(BaseModel):
     workspace_name: str | None = None
     notification_enabled: bool | None = None
     due_soon_days: int | None = Field(default=None, ge=1, le=180)
+    document_root_path: str | None = None
+
+
+class LibraryFileRead(BaseModel):
+    id: int
+    relative_path: str
+    absolute_path: str | None
+    filename: str
+    file_extension: str
+    title_guess: str
+    document_date: date | None
+    revision: int | None
+    file_modified_at: datetime | None
+    file_size_bytes: int | None
+    import_status: str
+    is_present: bool
+    catalog_item_id: int | None
+    catalog_code: str | None
+    catalog_title: str | None
+    catalog_area: str | None
+    suggested_catalog_item_id: int | None
+    suggested_catalog_code: str | None
+    suggested_catalog_title: str | None
+    suggested_catalog_area: str | None
+    suggestion_score: int
+    effective_catalog_area: str | None
+    linked_document_id: int | None
+    linked_document_title: str | None
+    last_scanned_at: datetime | None
+
+
+class LibraryFileUpdate(BaseModel):
+    import_status: str | None = None
+    catalog_item_id: int | None = None
+
+
+class LibraryScanRead(BaseModel):
+    root_path: str
+    scanned_at: datetime
+    scanned_count: int
+    discovered_count: int
+    updated_count: int
+    missing_count: int
 
 
 class OpenLinkResponse(BaseModel):

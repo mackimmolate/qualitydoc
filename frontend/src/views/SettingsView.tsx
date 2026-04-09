@@ -32,6 +32,14 @@ export function SettingsView({ draft, onChange, onSubmit, onRequestNotifications
               onChange={(event) => onChange({ ...draft, due_soon_days: event.target.value })}
             />
           </label>
+          <label className="wide">
+            Document root path
+            <input
+              placeholder="C:\\Users\\marcusj\\Documents\\GitHub\\qualitydoc\\Total dokument 240326"
+              value={draft.document_root_path}
+              onChange={(event) => onChange({ ...draft, document_root_path: event.target.value })}
+            />
+          </label>
           <label className="toggle-row">
             <span>Browser notifications</span>
             <input
@@ -41,7 +49,8 @@ export function SettingsView({ draft, onChange, onSubmit, onRequestNotifications
             />
           </label>
           <p className="helper-copy">
-            Notifications run in-app once per day while the app is open. Ingen e-post eller bakgrundstjanst i v1.
+            Notifications run in-app once per day while the app is open. The document root is scanned locally and the
+            original Word and Excel files stay outside the app.
           </p>
           <div className="card-actions">
             <button className="secondary-button" onClick={onRequestNotifications} type="button">

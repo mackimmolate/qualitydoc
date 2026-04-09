@@ -5,6 +5,10 @@ import type {
   DocumentFilters,
   DocumentInput,
   DocumentRecord,
+  LibraryFile,
+  LibraryFileUpdateInput,
+  LibraryFilters,
+  LibraryScanSummary,
   Settings,
   SettingsInput,
 } from './types'
@@ -72,6 +76,14 @@ const liveApi = {
     request<DocumentRecord>('/documents', { method: 'POST', body: JSON.stringify(payload) }),
   updateDocument: (id: number, payload: Partial<DocumentInput>) =>
     request<DocumentRecord>(`/documents/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  getLibraryFiles: (filters: Partial<LibraryFilters>) => request<LibraryFile[]>(`/library/files${buildQuery(filters)}`),
+  scanLibrary: () => request<LibraryScanSummary>('/library/scan', { method: 'POST' }),
+  updateLibraryFile: (id: number, payload: LibraryFileUpdateInput) =>
+    request<LibraryFile>(`/library/files/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  openLibraryFile: (id: number) =>
+    request<{ ok: boolean; message: string }>(`/library/files/${id}/open-link`, { method: 'POST' }),
+  createDocumentFromLibrary: (id: number, payload: DocumentInput) =>
+    request<DocumentRecord>(`/library/files/${id}/create-document`, { method: 'POST', body: JSON.stringify(payload) }),
   openDocumentLink: (id: number) =>
     request<{ ok: boolean; message: string }>(`/documents/${id}/open-link`, { method: 'POST' }),
   getSettings: () => request<Settings>('/settings'),

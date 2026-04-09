@@ -5,6 +5,10 @@ import type {
   DocumentFilters,
   DocumentInput,
   DocumentRecord,
+  LibraryFile,
+  LibraryFileUpdateInput,
+  LibraryFilters,
+  LibraryScanSummary,
   Settings,
   SettingsInput,
 } from './types'
@@ -281,6 +285,36 @@ async function getStatefulDocuments(filters: Partial<DocumentFilters>): Promise<
   return filterDocuments(getAllDocumentRecords(loadState()), filters)
 }
 
+async function createDemoDocument(payload: DocumentInput): Promise<DocumentRecord> {
+  await waitForTick()
+  const nextState = mutateState((current) => {
+    const catalogItem = payload.catalog_item_id
+      ? current.catalog.find((item) => item.id === payload.catalog_item_id) ?? null
+      : null
+    const reviewFrequency = payload.review_frequency_months ?? catalogItem?.review_frequency_months ?? null
+    const document: StoredDocument = {
+      id: current.next_document_id,
+      catalog_item_id: payload.catalog_item_id,
+      custom_title: normalizeText(payload.custom_title),
+      owner: normalizeText(payload.owner),
+      status: payload.status,
+      storage_link: normalizeText(payload.storage_link),
+      last_review_date: payload.last_review_date,
+      next_review_date: payload.next_review_date ?? deriveNextReview(payload.last_review_date, reviewFrequency),
+      review_frequency_months: payload.review_frequency_months,
+      notes: normalizeText(payload.notes),
+      tags: normalizeTags(payload.tags),
+      updated_at: new Date().toISOString(),
+    }
+    return {
+      ...current,
+      documents: [document, ...current.documents],
+      next_document_id: current.next_document_id + 1,
+    }
+  })
+  return toDocumentRecord(nextState.documents[0], nextState)
+}
+
 export const demoApi = {
   mode: 'pages-demo' as const,
   async getDashboard(): Promise<DashboardData> {
@@ -328,33 +362,7 @@ export const demoApi = {
     return getStatefulDocuments(filters)
   },
   async createDocument(payload: DocumentInput): Promise<DocumentRecord> {
-    await waitForTick()
-    const nextState = mutateState((current) => {
-      const catalogItem = payload.catalog_item_id
-        ? current.catalog.find((item) => item.id === payload.catalog_item_id) ?? null
-        : null
-      const reviewFrequency = payload.review_frequency_months ?? catalogItem?.review_frequency_months ?? null
-      const document: StoredDocument = {
-        id: current.next_document_id,
-        catalog_item_id: payload.catalog_item_id,
-        custom_title: normalizeText(payload.custom_title),
-        owner: normalizeText(payload.owner),
-        status: payload.status,
-        storage_link: normalizeText(payload.storage_link),
-        last_review_date: payload.last_review_date,
-        next_review_date: payload.next_review_date ?? deriveNextReview(payload.last_review_date, reviewFrequency),
-        review_frequency_months: payload.review_frequency_months,
-        notes: normalizeText(payload.notes),
-        tags: normalizeTags(payload.tags),
-        updated_at: new Date().toISOString(),
-      }
-      return {
-        ...current,
-        documents: [document, ...current.documents],
-        next_document_id: current.next_document_id + 1,
-      }
-    })
-    return toDocumentRecord(nextState.documents[0], nextState)
+    return createDemoDocument(payload)
   },
   async updateDocument(id: number, payload: Partial<DocumentInput>): Promise<DocumentRecord> {
     await waitForTick()
@@ -430,9 +438,35 @@ export const demoApi = {
         workspace_name: payload.workspace_name ?? current.settings.workspace_name,
         notification_enabled: payload.notification_enabled ?? current.settings.notification_enabled,
         due_soon_days: payload.due_soon_days ?? current.settings.due_soon_days,
+        document_root_path:
+          payload.document_root_path === undefined ? current.settings.document_root_path : payload.document_root_path,
+        library_last_scanned_at: current.settings.library_last_scanned_at,
       },
     }))
     return nextState.settings
+  },
+  async getLibraryFiles(filters: Partial<LibraryFilters>): Promise<LibraryFile[]> {
+    await waitForTick()
+    void filters
+    return []
+  },
+  async scanLibrary(): Promise<LibraryScanSummary> {
+    await waitForTick()
+    throw new Error('Library scanning is not available in the GitHub Pages demo.')
+  },
+  async updateLibraryFile(id: number, payload: LibraryFileUpdateInput): Promise<LibraryFile> {
+    await waitForTick()
+    void id
+    void payload
+    throw new Error('Library scanning is not available in the GitHub Pages demo.')
+  },
+  async openLibraryFile(id: number): Promise<{ ok: boolean; message: string }> {
+    await waitForTick()
+    void id
+    throw new Error('Library scanning is not available in the GitHub Pages demo.')
+  },
+  async createDocumentFromLibrary(_id: number, payload: DocumentInput): Promise<DocumentRecord> {
+    return createDemoDocument(payload)
   },
   async downloadDocumentsCsv(filters: Partial<DocumentFilters>): Promise<void> {
     const documents = await getStatefulDocuments(filters)

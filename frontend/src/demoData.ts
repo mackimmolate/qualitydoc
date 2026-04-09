@@ -245,6 +245,8 @@ export function createDemoState(): DemoState {
       workspace_name: 'QualityDoc Demo',
       notification_enabled: false,
       due_soon_days: 30,
+      document_root_path: null,
+      library_last_scanned_at: null,
     },
     catalog,
     documents,

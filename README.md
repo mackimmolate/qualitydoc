@@ -9,6 +9,7 @@ QualityDoc is a local-first TISAX documentation tracker built as:
 
 - Built-in TISAX starter catalog with editable defaults
 - Document register with owners, review dates, notes, tags, and external file links
+- Local document library scan for Word, Excel, and PDF files kept outside the app
 - Smart completeness checks for `missing`, `needs_owner`, `due_soon`, and `overdue`
 - Dashboard summaries, CSV export, and browser notifications
 - Local backend that can serve the built frontend for simple single-machine use
@@ -31,6 +32,32 @@ npm run dev
 ```
 
 The Vite dev server proxies `/api` to `http://127.0.0.1:8000`.
+
+## Local library workflow
+
+This repo now supports scanning a local evidence folder such as:
+
+```text
+Total dokument 240326
+```
+
+Recommended first-run flow:
+
+1. Start the backend and frontend locally.
+2. Open `Settings` and set `Document root path` to the full folder path.
+3. Save settings.
+4. Open `Library` and run `Scan library`.
+5. Review scanned files, save a TISAX mapping where needed, then use `Create record`.
+
+The scan stores metadata only:
+
+- relative path
+- parsed title guess
+- file date from filename when available
+- revision from filename when available
+- extension, size, modified time
+
+The original files remain in place and are never copied into Git.
 
 ## GitHub Pages demo
 
@@ -99,3 +126,4 @@ The FastAPI app will serve the built frontend from `frontend/dist`.
 - Override the database location with `QUALITYDOC_DB_URL`
 - The built-in TISAX catalog is a practical starter set, not a compliance guarantee
 - The GitHub Pages deployment is a frontend-only demo, not the live local application
+- `Total dokument 240326/` is ignored by Git and intended for local-only use

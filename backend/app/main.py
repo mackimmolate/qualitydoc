@@ -16,8 +16,16 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from .config import FRONTEND_DIST_DIR, default_database_url
-from .db import Base, CatalogItem, Document, Settings, create_db_engine, create_session_factory
+from .config import BASE_DIR, FRONTEND_DIST_DIR, default_database_url
+from .db import Base, CatalogItem, Document, LibraryFile, Settings, create_db_engine, create_session_factory
+from .library import (
+    LIBRARY_IMPORT_STATUSES,
+    filter_library_files,
+    resolve_library_file_path,
+    scan_library_root,
+    serialize_library_file,
+)
+from .migrations import run_sqlite_migrations
 from .rules import (
     DOCUMENT_STATUSES,
     build_dashboard,
@@ -34,6 +42,9 @@ from .schemas import (
     DocumentRead,
     DocumentUpdate,
     DocumentWrite,
+    LibraryFileRead,
+    LibraryFileUpdate,
+    LibraryScanRead,
     OpenLinkResponse,
     SettingsRead,
     SettingsUpdate,
@@ -49,12 +60,14 @@ def create_app(database_url: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         Base.metadata.create_all(bind=engine)
+        run_sqlite_migrations(engine)
+        Base.metadata.create_all(bind=engine)
         with session_factory() as session:
             seed_initial_data(session)
         yield
         engine.dispose()
 
-    app = FastAPI(title="QualityDoc API", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title="QualityDoc API", version="1.1.0", lifespan=lifespan)
     app.state.session_factory = session_factory
 
     app.add_middleware(
@@ -75,17 +88,52 @@ def create_app(database_url: str | None = None) -> FastAPI:
     def get_settings(session: Session) -> Settings:
         settings = session.get(Settings, 1)
         if settings is None:
-            settings = Settings(id=1, workspace_name="QualityDoc", notification_enabled=False, due_soon_days=30)
+            settings = Settings(
+                id=1,
+                workspace_name="QualityDoc",
+                notification_enabled=False,
+                due_soon_days=30,
+                document_root_path=None,
+                library_last_scanned_at=None,
+            )
             session.add(settings)
             session.commit()
             session.refresh(settings)
+        elif settings.document_root_path is None:
+            local_candidate = (BASE_DIR / "Total dokument 240326").resolve()
+            if local_candidate.exists() and local_candidate.is_dir():
+                settings.document_root_path = str(local_candidate)
+                session.add(settings)
+                session.commit()
+                session.refresh(settings)
         return settings
 
+    def settings_to_payload(settings: Settings) -> SettingsRead:
+        return SettingsRead(
+            workspace_name=settings.workspace_name,
+            notification_enabled=settings.notification_enabled,
+            due_soon_days=settings.due_soon_days,
+            document_root_path=settings.document_root_path,
+            library_last_scanned_at=settings.library_last_scanned_at,
+        )
+
     def read_documents(session: Session) -> list[Document]:
-        return session.scalars(select(Document).options(selectinload(Document.catalog_item)).order_by(Document.updated_at.desc())).all()
+        return session.scalars(
+            select(Document).options(selectinload(Document.catalog_item)).order_by(Document.updated_at.desc())
+        ).all()
 
     def read_catalog_items(session: Session) -> list[CatalogItem]:
         return session.scalars(select(CatalogItem).order_by(CatalogItem.area, CatalogItem.title)).all()
+
+    def read_library_files(session: Session) -> list[LibraryFile]:
+        return session.scalars(
+            select(LibraryFile)
+            .options(
+                selectinload(LibraryFile.catalog_item),
+                selectinload(LibraryFile.linked_document).selectinload(Document.catalog_item),
+            )
+            .order_by(LibraryFile.title_guess, LibraryFile.filename)
+        ).all()
 
     def normalize_text(value: str | None) -> str | None:
         if value is None:
@@ -95,6 +143,15 @@ def create_app(database_url: str | None = None) -> FastAPI:
 
     def document_to_payload(document: Document, settings: Settings) -> dict:
         return serialize_document(document, settings.due_soon_days, today=date.today())
+
+    def library_file_to_payload(
+        library_file: LibraryFile,
+        settings: Settings,
+        catalog_items: list[CatalogItem],
+        documents_by_id: dict[int, Document],
+    ) -> dict:
+        catalog_items_by_id = {item.id: item for item in catalog_items}
+        return serialize_library_file(library_file, settings, catalog_items_by_id, documents_by_id, catalog_items)
 
     def open_resource(link: str) -> None:
         parsed = urlparse(link)
@@ -235,30 +292,165 @@ def create_app(database_url: str | None = None) -> FastAPI:
         settings = get_settings(session)
         return document_to_payload(hydrated, settings)
 
+    @app.get("/api/library/files", response_model=list[LibraryFileRead])
+    def list_library_files(
+        query: str | None = Query(default=None),
+        status: str | None = Query(default=None),
+        area: str | None = Query(default=None),
+        presence: str | None = Query(default="present"),
+        session: Session = Depends(get_session),
+    ):
+        settings = get_settings(session)
+        catalog_items = read_catalog_items(session)
+        documents = read_documents(session)
+        documents_by_id = {document.id: document for document in documents}
+        library_files = [
+            library_file_to_payload(library_file, settings, catalog_items, documents_by_id)
+            for library_file in read_library_files(session)
+        ]
+        return filter_library_files(library_files, query=query, status=status, area=area, presence=presence)
+
+    @app.post("/api/library/scan", response_model=LibraryScanRead)
+    def scan_library(session: Session = Depends(get_session)):
+        settings = get_settings(session)
+        try:
+            return scan_library_root(session, settings, read_catalog_items(session))
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.patch("/api/library/files/{library_file_id}", response_model=LibraryFileRead)
+    def update_library_file(library_file_id: int, payload: LibraryFileUpdate, session: Session = Depends(get_session)):
+        library_file = session.scalar(
+            select(LibraryFile)
+            .where(LibraryFile.id == library_file_id)
+            .options(
+                selectinload(LibraryFile.catalog_item),
+                selectinload(LibraryFile.linked_document).selectinload(Document.catalog_item),
+            )
+        )
+        if library_file is None:
+            raise HTTPException(status_code=404, detail="Library file not found.")
+
+        updates = payload.model_dump(exclude_unset=True)
+        if "import_status" in updates and updates["import_status"] not in LIBRARY_IMPORT_STATUSES:
+            raise HTTPException(status_code=400, detail="Unsupported library import status.")
+
+        if "catalog_item_id" in updates and updates["catalog_item_id"] is not None:
+            catalog_item = session.get(CatalogItem, updates["catalog_item_id"])
+            if catalog_item is None:
+                raise HTTPException(status_code=404, detail="Catalog item not found.")
+
+        for field, value in updates.items():
+            setattr(library_file, field, value)
+
+        session.add(library_file)
+        session.commit()
+        session.refresh(library_file)
+
+        settings = get_settings(session)
+        catalog_items = read_catalog_items(session)
+        documents_by_id = {document.id: document for document in read_documents(session)}
+        hydrated = session.scalar(
+            select(LibraryFile)
+            .where(LibraryFile.id == library_file_id)
+            .options(
+                selectinload(LibraryFile.catalog_item),
+                selectinload(LibraryFile.linked_document).selectinload(Document.catalog_item),
+            )
+        )
+        return library_file_to_payload(hydrated, settings, catalog_items, documents_by_id)
+
+    @app.post("/api/library/files/{library_file_id}/open-link", response_model=OpenLinkResponse)
+    def open_library_file(library_file_id: int, session: Session = Depends(get_session)):
+        library_file = session.get(LibraryFile, library_file_id)
+        if library_file is None:
+            raise HTTPException(status_code=404, detail="Library file not found.")
+        if not library_file.is_present:
+            raise HTTPException(status_code=400, detail="Library file is no longer present on disk.")
+
+        settings = get_settings(session)
+        try:
+            open_resource(str(resolve_library_file_path(settings, library_file)))
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+        return OpenLinkResponse(ok=True, message="Library file opened with the default system handler.")
+
+    @app.post("/api/library/files/{library_file_id}/create-document", response_model=DocumentRead, status_code=201)
+    def create_document_from_library(
+        library_file_id: int,
+        payload: DocumentWrite,
+        session: Session = Depends(get_session),
+    ):
+        library_file = session.scalar(
+            select(LibraryFile)
+            .where(LibraryFile.id == library_file_id)
+            .options(selectinload(LibraryFile.catalog_item))
+        )
+        if library_file is None:
+            raise HTTPException(status_code=404, detail="Library file not found.")
+        if not library_file.is_present:
+            raise HTTPException(status_code=400, detail="Library file is no longer present on disk.")
+
+        settings = get_settings(session)
+        try:
+            resolved_path = resolve_library_file_path(settings, library_file)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if not resolved_path.exists():
+            raise HTTPException(status_code=400, detail="Scanned file does not exist on disk anymore.")
+
+        selected_catalog_item_id = payload.catalog_item_id if payload.catalog_item_id is not None else library_file.catalog_item_id
+        catalog_item = session.get(CatalogItem, selected_catalog_item_id) if selected_catalog_item_id else None
+        if selected_catalog_item_id and catalog_item is None:
+            raise HTTPException(status_code=404, detail="Catalog item not found.")
+
+        last_review_date = payload.last_review_date or library_file.document_date
+        review_months = payload.review_frequency_months or (catalog_item.review_frequency_months if catalog_item else None)
+        next_review_date = payload.next_review_date or derive_next_review(last_review_date, review_months)
+
+        document = Document(
+            catalog_item_id=selected_catalog_item_id,
+            custom_title=normalize_text(payload.custom_title),
+            owner=normalize_text(payload.owner),
+            status=payload.status,
+            storage_link=normalize_text(payload.storage_link) or str(resolved_path),
+            last_review_date=last_review_date,
+            next_review_date=next_review_date,
+            review_frequency_months=payload.review_frequency_months,
+            notes=normalize_text(payload.notes),
+            tags=clean_tags(payload.tags),
+        )
+        session.add(document)
+        session.flush()
+
+        library_file.catalog_item_id = selected_catalog_item_id
+        library_file.linked_document_id = document.id
+        library_file.import_status = "linked"
+        session.add(library_file)
+        session.commit()
+
+        hydrated = session.scalar(select(Document).where(Document.id == document.id).options(selectinload(Document.catalog_item)))
+        return document_to_payload(hydrated, settings)
+
     @app.get("/api/settings", response_model=SettingsRead)
     def read_settings(session: Session = Depends(get_session)):
-        settings = get_settings(session)
-        return SettingsRead(
-            workspace_name=settings.workspace_name,
-            notification_enabled=settings.notification_enabled,
-            due_soon_days=settings.due_soon_days,
-        )
+        return settings_to_payload(get_settings(session))
 
     @app.patch("/api/settings", response_model=SettingsRead)
     def update_settings(payload: SettingsUpdate, session: Session = Depends(get_session)):
         settings = get_settings(session)
         updates = payload.model_dump(exclude_unset=True)
+        if "document_root_path" in updates:
+            updates["document_root_path"] = normalize_text(updates["document_root_path"])
+
         for field, value in updates.items():
             setattr(settings, field, value)
 
         session.add(settings)
         session.commit()
         session.refresh(settings)
-        return SettingsRead(
-            workspace_name=settings.workspace_name,
-            notification_enabled=settings.notification_enabled,
-            due_soon_days=settings.due_soon_days,
-        )
+        return settings_to_payload(settings)
 
     @app.post("/api/documents/{document_id}/open-link", response_model=OpenLinkResponse)
     def open_document_link(document_id: int, session: Session = Depends(get_session)):

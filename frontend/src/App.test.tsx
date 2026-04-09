@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import App from './App'
-import type { CatalogItem, DashboardData, DocumentRecord, Settings } from './types'
+import type { CatalogItem, DashboardData, DocumentRecord, LibraryFile, Settings } from './types'
 
 const catalog: CatalogItem[] = [
   {
@@ -48,9 +48,12 @@ function createFetchMock() {
     workspace_name: 'QualityDoc',
     notification_enabled: false,
     due_soon_days: 30,
+    document_root_path: null,
+    library_last_scanned_at: null,
   }
 
   let documents: DocumentRecord[] = []
+  const libraryFiles: LibraryFile[] = []
 
   return vi.fn(async (input: string | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString()
@@ -62,6 +65,21 @@ function createFetchMock() {
 
     if (url.endsWith('/api/catalog')) {
       return Response.json(catalog)
+    }
+
+    if (url.includes('/api/library/files') && method === 'GET') {
+      return Response.json(libraryFiles)
+    }
+
+    if (url.endsWith('/api/library/scan') && method === 'POST') {
+      return Response.json({
+        root_path: 'C:/Docs',
+        scanned_at: '2026-04-09T10:00:00',
+        scanned_count: 0,
+        discovered_count: 0,
+        updated_count: 0,
+        missing_count: 0,
+      })
     }
 
     if (url.includes('/api/documents') && method === 'GET') {

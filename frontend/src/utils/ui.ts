@@ -1,4 +1,4 @@
-import type { CatalogItem, DocumentInput, DocumentRecord, DocumentStatus, Settings } from '../types'
+import type { CatalogItem, DocumentInput, DocumentRecord, DocumentStatus, LibraryFile, Settings } from '../types'
 
 export type DocumentDraft = {
   catalog_item_id: string
@@ -17,6 +17,7 @@ export type SettingsDraft = {
   workspace_name: string
   notification_enabled: boolean
   due_soon_days: string
+  document_root_path: string
 }
 
 export type CatalogDraft = {
@@ -48,6 +49,7 @@ export function settingsToDraft(settings: Settings): SettingsDraft {
     workspace_name: settings.workspace_name,
     notification_enabled: settings.notification_enabled,
     due_soon_days: String(settings.due_soon_days),
+    document_root_path: settings.document_root_path ?? '',
   }
 }
 
@@ -74,6 +76,22 @@ export function documentToDraft(document: DocumentRecord): DocumentDraft {
     review_frequency_months: document.review_frequency_months ? String(document.review_frequency_months) : '',
     notes: document.notes ?? '',
     tags_text: document.tags.join(', '),
+  }
+}
+
+export function libraryFileToDraft(file: LibraryFile): DocumentDraft {
+  const suggestedCatalogId = file.catalog_item_id ?? file.suggested_catalog_item_id
+  return {
+    catalog_item_id: suggestedCatalogId ? String(suggestedCatalogId) : '',
+    custom_title: file.title_guess,
+    owner: '',
+    status: 'active',
+    storage_link: file.absolute_path ?? '',
+    last_review_date: file.document_date ?? '',
+    next_review_date: '',
+    review_frequency_months: '',
+    notes: `Imported from local library scan: ${file.filename}`,
+    tags_text: file.revision ? `rev-${file.revision}` : '',
   }
 }
 
@@ -123,6 +141,32 @@ export function formatDate(value: string | null): string {
     month: 'short',
     year: 'numeric',
   }).format(new Date(year, month - 1, day))
+}
+
+export function formatDateTime(value: string | null): string {
+  if (!value) {
+    return 'Not available'
+  }
+  return new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
+}
+
+export function formatBytes(value: number | null): string {
+  if (!value || value < 0) {
+    return 'Unknown size'
+  }
+  if (value < 1024) {
+    return `${value} B`
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
 
 export function relativeReviewLabel(document: DocumentRecord): string {

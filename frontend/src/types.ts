@@ -1,6 +1,8 @@
-export type ViewName = 'dashboard' | 'documents' | 'catalog' | 'settings'
+export type ViewName = 'dashboard' | 'library' | 'documents' | 'catalog' | 'settings'
 export type DocumentStatus = 'draft' | 'active' | 'review' | 'archived'
 export type AttentionFilter = 'all' | 'needs_owner' | 'due_soon' | 'overdue' | 'healthy'
+export type LibraryImportStatus = 'all' | 'unmapped' | 'linked' | 'ignored'
+export type LibraryPresenceFilter = 'all' | 'present' | 'missing'
 
 export interface DashboardSummary {
   total_documents: number
@@ -73,6 +75,8 @@ export interface Settings {
   workspace_name: string
   notification_enabled: boolean
   due_soon_days: number
+  document_root_path: string | null
+  library_last_scanned_at: string | null
 }
 
 export interface DocumentFilters {
@@ -80,6 +84,13 @@ export interface DocumentFilters {
   status: string
   area: string
   attention: AttentionFilter
+}
+
+export interface LibraryFilters {
+  query: string
+  status: LibraryImportStatus
+  area: string
+  presence: LibraryPresenceFilter
 }
 
 export interface DocumentInput {
@@ -108,4 +119,47 @@ export interface SettingsInput {
   workspace_name?: string
   notification_enabled?: boolean
   due_soon_days?: number
+  document_root_path?: string | null
+}
+
+export interface LibraryFile {
+  id: number
+  relative_path: string
+  absolute_path: string | null
+  filename: string
+  file_extension: string
+  title_guess: string
+  document_date: string | null
+  revision: number | null
+  file_modified_at: string | null
+  file_size_bytes: number | null
+  import_status: Exclude<LibraryImportStatus, 'all'>
+  is_present: boolean
+  catalog_item_id: number | null
+  catalog_code: string | null
+  catalog_title: string | null
+  catalog_area: string | null
+  suggested_catalog_item_id: number | null
+  suggested_catalog_code: string | null
+  suggested_catalog_title: string | null
+  suggested_catalog_area: string | null
+  suggestion_score: number
+  effective_catalog_area: string | null
+  linked_document_id: number | null
+  linked_document_title: string | null
+  last_scanned_at: string | null
+}
+
+export interface LibraryFileUpdateInput {
+  import_status?: Exclude<LibraryImportStatus, 'all'>
+  catalog_item_id?: number | null
+}
+
+export interface LibraryScanSummary {
+  root_path: string
+  scanned_at: string
+  scanned_count: number
+  discovered_count: number
+  updated_count: number
+  missing_count: number
 }

@@ -81,9 +81,17 @@ def test_csv_export_matches_filter(client) -> None:
 
 
 def test_settings_and_open_link_validation(client, monkeypatch, tmp_path: Path) -> None:
-    settings_response = client.patch("/api/settings", json={"workspace_name": "North Star", "due_soon_days": 14})
+    settings_response = client.patch(
+        "/api/settings",
+        json={
+            "workspace_name": "North Star",
+            "due_soon_days": 14,
+            "document_root_path": str(tmp_path),
+        },
+    )
     assert settings_response.status_code == 200
     assert settings_response.json()["workspace_name"] == "North Star"
+    assert settings_response.json()["document_root_path"] == str(tmp_path)
 
     catalog_item_id = client.get("/api/catalog").json()[0]["id"]
     document = client.post(
@@ -121,3 +129,63 @@ def test_settings_and_open_link_validation(client, monkeypatch, tmp_path: Path) 
 def test_documents_filter_endpoint_accepts_attention_modes(client, attention_filter: str) -> None:
     response = client.get(f"/api/documents?attention={attention_filter}")
     assert response.status_code == 200
+
+
+def test_library_scan_and_import_flow(client, tmp_path: Path) -> None:
+    source_file = tmp_path / "IT- och Informationssäkerhetspolicy - 2024-05-30 Rev 4.docx"
+    source_file.write_text("evidence", encoding="utf-8")
+
+    settings_response = client.patch("/api/settings", json={"document_root_path": str(tmp_path)})
+    assert settings_response.status_code == 200
+
+    scan_response = client.post("/api/library/scan")
+    assert scan_response.status_code == 200
+    assert scan_response.json()["scanned_count"] == 1
+
+    library_files = client.get("/api/library/files").json()
+    assert len(library_files) == 1
+    library_file = library_files[0]
+    assert library_file["document_date"] == "2024-05-30"
+    assert library_file["revision"] == 4
+    assert library_file["is_present"] is True
+
+    catalog_item_id = client.get("/api/catalog").json()[0]["id"]
+    mapping_response = client.patch(
+        f"/api/library/files/{library_file['id']}",
+        json={"catalog_item_id": catalog_item_id},
+    )
+    assert mapping_response.status_code == 200
+
+    imported = client.post(
+        f"/api/library/files/{library_file['id']}/create-document",
+        json={
+            "owner": "Marcus",
+            "status": "active",
+            "tags": ["imported"],
+        },
+    )
+    assert imported.status_code == 201
+    assert imported.json()["storage_link"].endswith(source_file.name)
+    assert imported.json()["last_review_date"] == "2024-05-30"
+
+    library_after = client.get("/api/library/files?status=linked").json()
+    assert len(library_after) == 1
+    assert library_after[0]["linked_document_id"] is not None
+
+
+def test_library_scan_marks_removed_files_as_missing(client, tmp_path: Path) -> None:
+    source_file = tmp_path / "Supplier Security Assessment - 2025-12-22 Rev 2.docx"
+    source_file.write_text("evidence", encoding="utf-8")
+    client.patch("/api/settings", json={"document_root_path": str(tmp_path)})
+
+    first_scan = client.post("/api/library/scan")
+    assert first_scan.status_code == 200
+
+    source_file.unlink()
+    second_scan = client.post("/api/library/scan")
+    assert second_scan.status_code == 200
+    assert second_scan.json()["missing_count"] == 1
+
+    missing_files = client.get("/api/library/files?presence=missing").json()
+    assert len(missing_files) == 1
+    assert missing_files[0]["is_present"] is False

@@ -56,6 +56,30 @@ class Document(Base):
     catalog_item: Mapped[CatalogItem | None] = relationship(back_populates="documents")
 
 
+class LibraryFile(Base):
+    __tablename__ = "library_files"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    relative_path: Mapped[str] = mapped_column(String(512), unique=True, index=True)
+    filename: Mapped[str] = mapped_column(String(255), index=True)
+    file_extension: Mapped[str] = mapped_column(String(16))
+    title_guess: Mapped[str] = mapped_column(String(255))
+    document_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    file_modified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    file_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    import_status: Mapped[str] = mapped_column(String(32), default="unmapped", index=True)
+    is_present: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    catalog_item_id: Mapped[int | None] = mapped_column(ForeignKey("catalog_items.id"), nullable=True, index=True)
+    linked_document_id: Mapped[int | None] = mapped_column(ForeignKey("documents.id"), nullable=True, index=True)
+    last_scanned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    catalog_item: Mapped[CatalogItem | None] = relationship()
+    linked_document: Mapped[Document | None] = relationship()
+
+
 class Settings(Base):
     __tablename__ = "settings"
 
@@ -63,6 +87,8 @@ class Settings(Base):
     workspace_name: Mapped[str] = mapped_column(String(128), default="QualityDoc")
     notification_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     due_soon_days: Mapped[int] = mapped_column(Integer, default=30)
+    document_root_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    library_last_scanned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
